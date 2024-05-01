@@ -1,3 +1,10 @@
+//Sistemas Operativos: Examen practico de procesos
+//Carmona Ayala Mariana Zoe
+//Carranza Paula Jose Carlos
+//Gonzalez Nava Alicia Aislinn
+//Quintero Montero Francisco Joshua
+
+//Librerias a utilizar
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -8,14 +15,6 @@
 
 
 //Prototipos de funcion
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <string.h>
-#include <sys/wait.h>
-#include <dirent.h>
-#include <sys/stat.h>
-
 // Prototipo de la función para copiar un archivo o directorio
 void copiar(const char *origen, const char *destino_base);
 
@@ -43,6 +42,9 @@ void enviar_ruta(int fd, const char *ruta);
 // Prototipo de la función para listar y enviar archivos y directorios a través de un pipe
 void listar_y_enviar(int pipe_envio, int pid_padre, const char *ruta_directorio);
 
+char globalDestDir[100];
+int globalTotArchivos;
+
 int obtener_rutas(int argc, char *argv[], char *srcDir, char *destDir) {
     if (argc != 3) {
         int opcion;
@@ -59,6 +61,7 @@ int obtener_rutas(int argc, char *argv[], char *srcDir, char *destDir) {
 
                     printf("Indica el directorio de destino: ");
                     scanf("%99s", destDir); // Leyendo directorio de destino
+                    strcpy(globalDestDir, destDir);
                     getchar(); // consume the newline character left in the input buffer
                     return 0;
 
@@ -80,6 +83,7 @@ int obtener_rutas(int argc, char *argv[], char *srcDir, char *destDir) {
                             sscanf(linea, "ruta de origen: %99[^\n]", srcDir);
                         } else if (strstr(linea, "ruta de destino:") != NULL) {
                             sscanf(linea, "ruta de destino: %99[^\n]", destDir);
+                            strcpy(globalDestDir, destDir);
                         }
                     }
                     fclose(rutas);
@@ -245,7 +249,7 @@ void vaciar_directorio(const char *path) {
             char full_path[1024];
             snprintf(full_path, sizeof(full_path), "%s/%s", path, entry->d_name);
             remove(full_path);
-            printf("Borrado durante la limpieza: %s\n", entry->d_name);
+            printf("removed '%s'\n", entry->d_name);
         }
     }
     closedir(dir);
@@ -279,16 +283,18 @@ void listar_y_enviar(int pipe_envio, int pid_padre, const char *ruta_directorio)
 
     rewinddir(dir);
     write(pipe_envio, &numArchivos, sizeof(numArchivos));
+    globalTotArchivos = numArchivos;
+    printf("======== RESPALDANDO %d ARCHIVOS ========\n", numArchivos);
     while ((entry = readdir(dir)) != NULL) {
         if (entry->d_type == DT_REG || (entry->d_type == DT_DIR && strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0)) {
             const char *fileName = entry->d_name;
             int longitud = strlen(fileName) + 1;
             write(pipe_envio, &longitud, sizeof(longitud));
             write(pipe_envio, fileName, longitud);
-            printf("Padre con pid = %d envía al hijo: %s\n", pid_padre, fileName);
+            printf("(PADRE --> %s)\n", fileName);
         }
     }
-    printf("Padre con pid = %d, total de archivos a respaldar es de %d\n", getpid(), numArchivos);
+
 
     closedir(dir);
 }
@@ -320,8 +326,9 @@ int main(int argc, char *argv[])  {
 
         int total_archivos;
         read(pipe_padre_hijo[0], &total_archivos, sizeof(total_archivos));
-        printf("Hijo (pid=%d) recibe el mensaje de su padre y el total de archivos a respaldar es de %d\n", getpid(), total_archivos);
-        for (int i = 0; i < total_archivos; i++) {
+        globalTotArchivos = total_archivos;
+        printf("HIJO (pid=%d) recibe el mensaje de su padre y el total de archivos a respaldar es de %d\n", getpid(), total_archivos);
+        for (int i = total_archivos-1; i > -1; i--) {
             int longitud;
             read(pipe_padre_hijo[0], &longitud, sizeof(longitud));
             char *nombre_archivo = malloc(longitud);
@@ -331,12 +338,12 @@ int main(int argc, char *argv[])  {
             snprintf(fullPath, sizeof(fullPath), "%s/%s", origen, nombre_archivo);
             copiar(fullPath, destino);
 
-            printf("El hijo (pid=%d) respaldó: %s\n", getpid(), nombre_archivo);
+            printf("\tHijo(pid=%d), respaldando el archivo: %s\tpendientes: %d/%d\n", getpid(), nombre_archivo,i,total_archivos);
             free(nombre_archivo);
         }
 
             // Enviar mensaje de finalización al padre
-            const char *mensaje_fin = "Finalicé el respaldo";
+            const char *mensaje_fin = "Adios padre, termine el respaldo...";
             int msg_len = strlen(mensaje_fin) + 1;
             write(pipe_hijo_padre[1], &msg_len, sizeof(msg_len));
             write(pipe_hijo_padre[1], mensaje_fin, msg_len);
@@ -345,6 +352,7 @@ int main(int argc, char *argv[])  {
         close(pipe_hijo_padre[1]); // Cierra la escritura del pipe hijo-padre
         exit(0);
     } else { // Proceso padre
+    
         close(pipe_padre_hijo[0]); // Cierra la lectura del pipe padre-hijo
         close(pipe_hijo_padre[1]); // Cierra la escritura del pipe hijo-padre
 
@@ -366,11 +374,13 @@ int main(int argc, char *argv[])  {
         agregarbackup(ruta_destino,añadir,sizeof(ruta_destino));   
 
         // Llamar a la función para crear el archivo de lista de archivos
+        printf("\nPADRE(pid=%d): generando LISTA DE ARCHIVOS A RESPALDAR\n",getpid());
+
         if (crear_lista_archivos(ruta_directorio, ruta_lista_archivos) != EXIT_SUCCESS) {
             fprintf(stderr, "Error al crear el archivo de lista de archivos\n");
             exit(EXIT_FAILURE);
         }        
-
+        printf("PADRE(pid=%d): borrando respaldo viejo...\n",getpid());
         vaciar_directorio(ruta_destino);
 
         enviar_ruta(pipe_padre_hijo[1], ruta_directorio);
@@ -384,13 +394,20 @@ int main(int argc, char *argv[])  {
         char *fin_msg = malloc(1024);
         read(pipe_hijo_padre[0], &msg_len, sizeof(msg_len));
         read(pipe_hijo_padre[0], fin_msg, msg_len);
-        printf("Mensaje del hijo: %s\n", fin_msg);
-        printf("Padre recibe mensaje del hijo y finaliza.\n");
+        printf("PADRE(pid=%d), Mensaje del hijo: <--- %s\n",getpid(), fin_msg);
+         printf("\n\nPADRE(pid=%d), recibe el TOTAL de %d archivos respaldados con exito\n",getpid(), globalTotArchivos);
         free(fin_msg);
 
         close(pipe_padre_hijo[1]); // Cierra la escritura del pipe padre-hijo
         close(pipe_hijo_padre[0]); // Cierra la lectura del pipe hijo-padre
-        wait(NULL); // Espera a que el hijo termine
+        printf("\nPADRE(pid=%d) comprobando respaldo:\n=========================================================\n", getpid());
+        char comando[200];
+        sprintf(comando, "cd %s/backup && ls -l", globalDestDir);
+        system(comando);
+        printf("%d\n  ARCHIVOS RESPALDADOS\n=========================================================\n",globalTotArchivos);
+        
+        //wait(NULL); // Espera a que el hijo termine
+        printf("Termino el proceso padre...\n");
     }
 
     return 0;

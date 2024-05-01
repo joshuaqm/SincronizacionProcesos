@@ -1,0 +1,5 @@
+FILE:C
+FILE:A
+FILE:B
+FILE:D
+Total de archivos: 4
