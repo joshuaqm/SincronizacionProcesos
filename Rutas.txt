@@ -1,0 +1,2 @@
+ruta de origen: /home/josu/Descargas/p1
+ruta de destino:  /home/josu/Escritorio/aa
